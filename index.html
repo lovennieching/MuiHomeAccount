@@ -76,6 +76,9 @@ form label{display:block;font-size:13px;color:var(--mut);margin-top:10px}form in
  <h2>備份與匯入</h2>
  <div class="row2"><button class="b" id="exj">匯出備份 (JSON)</button><label class="b g">匯入備份 / CSV<input type="file" id="imp" accept=".json,.csv" hidden></label></div>
  <div class="row2"><button class="b g" id="exc">匯出記錄 (CSV)</button><button class="b g" id="ics">匯出到期提醒 (.ics)</button></div>
+ <h2>資料放上網站（加密）</h2>
+ <div class="row2"><button class="b g" id="enx">匯出加密資料</button><button class="b" id="enl">從網站載入加密資料</button></div>
+ <p style="color:var(--mut);font-size:13px">匯出會產生 data.enc，用密碼加密（AES-256）。將它上傳到 GitHub 同一個 repository，姊妹們撳「從網站載入加密資料」並輸入密碼即可。沒有密碼，任何人都看不到內容。</p>
  <h2>其他</h2>
  <div class="row2"><button class="b g" id="seed">載入初始應收項目</button><button class="b d" id="clr">清除本機資料</button></div>
  <p class="s" style="color:var(--mut)">資料只存放在這部裝置的瀏覽器。換手機或電腦前，請先匯出備份。CSV 匯入欄位：日期、項目、類型、分類、經手人、幣種、收入、支出。</p>
@@ -284,6 +287,18 @@ function autoAlerts(){const A=[],T=td();
   else if(c.day){const nx=nextOcc(c.months,c.day),k=nx?dayDiff(nx):99;if(k<=7)A.push({t:`德昌 ${c.n}`,s:`${k} 日後到期（${nx}）`,amt:per,cls:'soon',go:'rt',c:'out'})}});
  fixeds().filter(x=>!x.done&&x.mat).forEach(x=>{const k=dayDiff(x.mat);if(k<=7)A.push({t:`定期 ${x.who} ${x.cur} ${fmt(x.pr)}`,s:k<0?`已過到期日 ${-k} 日，未記完結`:k===0?'今日到期':`${k} 日後到期（${x.mat}）`,amt:0,cls:k<0?'late':'soon',go:'fd',c:''})});
  return A.sort((a,b)=>(a.cls==='late'?0:1)-(b.cls==='late'?0:1))}
+const b64=u=>{let t='';for(let i=0;i<u.length;i+=8192)t+=String.fromCharCode(...u.subarray(i,i+8192));return btoa(t)},ub=t=>Uint8Array.from(atob(t),c=>c.charCodeAt(0));
+async function ckey(pw,salt){const m=await crypto.subtle.importKey('raw',new TextEncoder().encode(pw),'PBKDF2',false,['deriveKey']);return crypto.subtle.deriveKey({name:'PBKDF2',salt,iterations:250000,hash:'SHA-256'},m,{name:'AES-GCM',length:256},false,['encrypt','decrypt'])}
+async function enc(pw){const salt=crypto.getRandomValues(new Uint8Array(16)),iv=crypto.getRandomValues(new Uint8Array(12)),k=await ckey(pw,salt),ct=new Uint8Array(await crypto.subtle.encrypt({name:'AES-GCM',iv},k,new TextEncoder().encode(JSON.stringify(S))));return JSON.stringify({v:1,s:b64(salt),i:b64(iv),d:b64(ct)})}
+async function dec(txt,pw){const o=JSON.parse(txt),k=await ckey(pw,ub(o.s));return JSON.parse(new TextDecoder().decode(await crypto.subtle.decrypt({name:'AES-GCM',iv:ub(o.i)},k,ub(o.d))))}
+function askPw(title,cf){return new Promise(r=>{const f=$('#frm');let done=false;
+ f.innerHTML=`<h2 style="margin-top:0;color:var(--tx)">${title}</h2><label>密碼<input type="password" name="pw" autocomplete="off" required${cf?' minlength="8"':''}></label>${cf?'<label>再輸入一次<input type="password" name="pw2" autocomplete="off" required></label><p class="s" style="color:var(--mut);font-size:13px">請用 8 個字元以上，並妥善記住；忘記密碼無法找回。</p>':''}<div class="row2" style="margin-top:16px"><button class="b" value="ok">確定</button><button class="b g" value="x" formnovalidate>取消</button></div>`;
+ f.onsubmit=e=>{if(e.submitter&&e.submitter.value==='x'){done=true;r(null);return}const fd=Object.fromEntries(new FormData(f));if(cf&&fd.pw!==fd.pw2){e.preventDefault();say('兩次密碼不一致');return}done=true;r(fd.pw)};
+ const d=$('#dlg');d.onclose=()=>{if(!done)r(null)};d.showModal()})}
+async function loadEnc(){let txt;try{const r=await fetch('data.enc',{cache:'no-store'});if(!r.ok)throw 0;txt=await r.text()}catch(e){return say('網站未有 data.enc，或讀取失敗')}
+ const pw=await askPw('輸入密碼');if(!pw)return;let o;try{o=await dec(txt,pw)}catch(e){return say('密碼不正確，或檔案已損毀')}
+ if(!Array.isArray(o.recs)||!Array.isArray(o.dues))return say('資料格式唔正確');
+ if((S.recs.length||S.dues.length)&&!await ask('會取代目前裝置上嘅資料，繼續？'))return;S=o;save();say('已載入資料')}
 function dueState(d){if(!d.due)return'';const k=dayDiff(d.due);return k<0?'late':k<=7?'soon':''}
 function dueLine(d){const k=d.due?dayDiff(d.due):null;
  const w=k===null?'未設到期日':k<0?`逾期 ${-k} 日`:k===0?'今日到期':`${k} 日後到期（${d.due}）`;return w}
@@ -405,6 +420,8 @@ document.addEventListener('click',async e=>{const t=e.target.closest('button,.it
  if(t.id==='exj')dl('貓之家備份.json',JSON.stringify(S),'application/json');
  if(t.id==='exc')dl('貓之家記錄.csv','\uFEFF日期,項目,類型,分類,經手人,幣種,收入,支出\n'+S.recs.map(r=>[r.date,r.item,r.type,r.cat,r.who,r.cur,r.inc||'',r.exp||''].map(csvq).join(',')).join('\n'),'text/csv');
  if(t.id==='ics')ics();
+ if(t.id==='enx'){const pw=await askPw('設定加密密碼',true);if(!pw)return;try{dl('data.enc',await enc(pw),'text/plain');say('已匯出 data.enc，請上傳到 GitHub repository')}catch(e){say('加密失敗')}}
+ if(t.id==='enl')loadEnc();
  if(t.id==='seed'){if(S.dues.length&&!await ask('已有應收應付項目，仍要加入初始項目？'))return;
   [['應收','Yaya','家用供款 2026-07 至 2026-11',5000,'家用'],['應收','Mos','家用供款 2026-10 至 2026-12',3000,'家用'],['應收','德昌 Rm3','租金 11月份',4639,'德昌'],['應收','Mos','借款（2026-08-12）',60000,'']]
   .forEach(([dir,who,item,amt,cat])=>S.dues.push({id:uid(),dir,who,item,amt,cur:'HKD',due:'',cat,note:'',status:'未收'}));save()}
